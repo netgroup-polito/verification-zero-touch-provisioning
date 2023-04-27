@@ -1,0 +1,404 @@
+(* FIDO FDO - version 1.1 *)
+
+free ch:channel. 			(* Public channel *)
+free ch_dev_man:channel [private].	(* Private channel between the Device and the Manufacturer*)
+const P:bitstring.
+
+type pkey.
+type skey.
+type result.
+
+(* Asymmetric signature *)
+fun pk(skey):pkey.
+fun ok():result.
+fun sign(bitstring, skey):bitstring.
+reduc forall m:bitstring, sk:skey; checksign(sign(m, sk), m, pk(sk)) = ok().
+
+(* Symmetric encryption *)
+fun senc(bitstring, bitstring):bitstring.
+reduc forall m:bitstring, shk:bitstring; sdec(senc(m, shk), shk) = m.
+
+(* Hash function *)
+fun hash(bitstring):bitstring.
+
+(* Key derivation function *)
+fun KDF(bitstring):bitstring.
+
+(* HMAC *)
+fun hmac(bitstring, bitstring):bitstring.
+
+(* Scalar multiplication *)
+fun pmult(bitstring, bitstring):bitstring.
+fun plus(bitstring, bitstring):bitstring.
+reduc forall R:bitstring, y:bitstring;
+	emverify(R, pmult(R,y), pmult(P,y)) = ok().
+
+(* ACKA ephimeral credentials *)
+fun cre(bitstring):bitstring.
+fun exp(bitstring, bitstring):bitstring.
+equation forall x:bitstring, y:bitstring, B:bitstring;
+	exp(exp(cre(B), x), y) = exp(exp(cre(B), y), x).
+
+(* EVENTS *)
+event EndProtocol().
+event EndManufacturer().
+event EndOwner().
+event EndRendezvousServer().
+event EndDevice().
+event Test().
+event OwnerValidOVDevCredentialsReceived(bitstring).
+event ManufacturerValidOVDevCredentialsSent(bitstring).
+event OwnerValidOVReceived(bitstring).
+event ManufacturerValidOVSent(bitstring).
+event RendezvousServerEndTO0(bitstring).
+event OwnerInitTO0(bitstring).
+event RendezvousServerEndTO1(bitstring).
+event DeviceInitTO1(bitstring).
+event RendezvousServerInitTO1(bitstring).
+event DeviceEndTO1(bitstring).
+event DeviceInitTO2(bitstring).
+event FogNodeEndTO2(bitstring).
+
+(* QUERIES *)
+
+(* Secrey of the symmetric key shared between device and fog node - result. TRUE, the property holds *)
+free squery:bitstring [private].
+query attacker(squery).
+
+(* Strong secrey of the symmetric key shared between device and fog node - result: TRUE, the property holds *)
+noninterf squery.
+
+(* Offline guessing attacks - result: TRUE, the property holds *)
+weaksecret squery.
+
+(* Phase -1: The Owner reeives the OV from the Manufacturer *)
+(* Authentication of the Manufacturer OVCredentials: only the Manufacturer can have created valid CL-credentials - RESULT: true *)
+query OVDevCredentials:bitstring; 
+	event(OwnerValidOVDevCredentialsReceived(OVDevCredentials)) ==> event(ManufacturerValidOVDevCredentialsSent(OVDevCredentials)).
+(* Injective version - RESULT: false, OV can be changed while maintaining the same credentials (see below) *)
+query OVDevCredentials:bitstring; 
+	inj-event(OwnerValidOVDevCredentialsReceived(OVDevCredentials)) ==> inj-event(ManufacturerValidOVDevCredentialsSent(OVDevCredentials)).
+(* Authentication of the Manufacturer: OV - RESULT: false, OV can be changed during the transit, Owner needs pkman to check integrity *)
+query OV:bitstring; event(OwnerValidOVReceived(OV)) ==> event(ManufacturerValidOVSent(OV)).
+	
+(* TO0 protocol *)
+(* Authentication of the Owner to the Server - RESULT: true *)
+query m:bitstring; event(RendezvousServerEndTO0(m)) ==> event(OwnerInitTO0(m)).
+(* The protocol does not provide mechanisms to verify authentication of the Server to the Owner *)
+
+(* TO1 protocol *)
+(* Authentication of the Device to the Server - RESULT: false, there is no device authentication to the server in TO1, device simply sends its guid *)
+query guid:bitstring; event(RendezvousServerEndTO1(guid)) ==> event(DeviceInitTO1(guid)).
+(* Authentication of the Server to the Device - RESULT: false, the attacker can intercept the message from Owner-Server and send this message to the Device *)
+query m:bitstring; event(DeviceEndTO1(m)) ==> event(RendezvousServerInitTO1(m)).
+(* Authentication of the Owner to the Device: only a valid Owner can have computed a valid kenc and kmac. The device checks also proof of possession of OV
+   RESULT: true *)
+query m:bitstring; inj-event(DeviceEndTO1(m)) ==> inj-event(OwnerInitTO0(m)).
+
+(* TO2 protocol *)
+(* Authentication of the Device to the FogNode - RESULT: true *)
+query m:bitstring; event(FogNodeEndTO2(m)) ==> event(DeviceInitTO2(m)).
+
+
+query event(EndProtocol()).
+
+
+
+
+let Device(spkman:pkey) =
+
+	(* DI PROTOCOL *)
+
+	(* Receive CL-credentials and f (private key) from the Manufacturer *)
+	in(ch_dev_man, m:bitstring);
+	let (clcre:bitstring, OVHeader:bitstring, f:bitstring) = m in
+	let (guid:bitstring, iprendezvous:bitstring, pkman:pkey, hashDevCertChain:bitstring) = OVHeader in
+
+	(* Compute hash of the OVHeader *)
+	let hashOVHeader = hash(OVHeader) in
+
+	(* T01 protocol *)
+
+	(* Message for the Rendezvous server *)
+	let mtoserver = (iprendezvous, guid) in
+
+	event DeviceInitTO1(guid);
+	out(ch, mtoserver);
+
+	in(ch, mserver:bitstring);
+	
+	let (mowner:bitstring, signature:bitstring) = mserver in
+	let (guid'':bitstring, U':bitstring, OV':bitstring, tag':bitstring, encblob':bitstring) = mowner in
+	
+	(* Validate OV' *)
+	let (OVHeader':bitstring, OVDevCertChain':bitstring, OVEntry':bitstring) = OV' in
+	let (guid':bitstring, iprendezvous':bitstring, pkman':pkey, hashDevCertChain':bitstring) = OVHeader' in
+	let (OVEntryPayload':bitstring, signman':bitstring) = OVEntry' in
+	let (pkown':pkey, hashHeader':bitstring) = OVEntryPayload' in 
+
+	(* Check hash OVHeader *)
+	if hashOVHeader = hash(OVHeader') then		(* OVHeader matches the original one, so also guid, iprendezvous, pkman, hashDevCertChain *)
+	(* Check hash on DevCertChain *)
+	if hashDevCertChain = hash(OVDevCertChain') then
+	(* Check signature in the last entry *)
+	if checksign(signman', OVEntryPayload', pkman') = ok() then
+	(* Check if pkman in the OVHeader is correct *)
+	if pkman = pkman' then
+
+	(* Received a correct OV *)
+	
+	(* Verify the signature on mowner *)
+	if checksign(signature, mowner, pkown') = ok() then
+
+	(* Finish ACKA *)
+	let Z = exp(U', f) in
+	
+	let kenc = KDF(Z) in
+	let kmac = KDF(KDF(Z)) in
+
+	(* Extract blob *)
+	let blob = sdec(encblob', kenc) in
+	(* Verify tag *)
+	if tag' = hmac(blob, kmac) then
+
+	event DeviceEndTO1(mowner);
+
+	(* TO2 protocol *)
+
+	(* Open blob *)
+	let (ipfognode:bitstring, kfogdevice:bitstring) = blob in
+
+	let mfognode = (guid, ipfognode, senc(squery, kfogdevice)) in
+
+	event DeviceInitTO2(mfognode);
+
+	out(ch, mfognode);
+
+	event EndDevice()
+	.
+
+
+let Manufacturer(skman:skey, guid:bitstring, iprendezvous:bitstring, pkown:pkey, x:bitstring, y:bitstring) =
+
+	(* DI PROTOCOL *)
+	
+	(* Create Device CL-credentials *)
+	new r:bitstring;
+	new f:bitstring;
+
+	(* Generate randomized credentials *)
+	let R = pmult(P, r) in
+	let S = pmult(R, y) in
+	let T = pmult(plus(R, exp(cre(pmult(pmult(P, r), y)), f)), x) in
+	let W = exp(cre(pmult(pmult(P, r), y)), f) in
+
+	let clcre = (R, S, T, W) in
+
+	(* Create Ownership Voucher *)
+	let OVDevCertChain = clcre in
+	let OVHeader = (guid, iprendezvous, pk(skman), hash(OVDevCertChain)) in
+	let OVEntryPayload = (pkown, hash(OVHeader)) in
+	let OVEntry = (OVEntryPayload, sign(OVEntryPayload, skman)) in
+	let OV = (OVHeader, OVDevCertChain, OVEntry) in
+
+	(* Send CL-credentials, OVHeader and f (private seed) to the Device *)
+	(* We assume the DI protocol happens in a safe environment (e.g., manufacturing house) *)
+	out(ch_dev_man,  (clcre, OVHeader, f));
+
+	(* Send OV to the Owner *)
+	event ManufacturerValidOVDevCredentialsSent(OVDevCertChain);
+	event ManufacturerValidOVSent(OV);
+	out(ch, OV);
+
+	event EndManufacturer()
+	.
+	
+
+
+let Owner(kfog:bitstring, skown:skey, ipfognode:bitstring, X:bitstring, Y:bitstring) = 
+	
+	(* Receive OV from the Manufacturer *)
+	in(ch, OV:bitstring);
+
+	(* Validate OV *)
+	let (OVHeader:bitstring, OVDevCertChain:bitstring, OVEntry:bitstring) = OV in
+	let (R:bitstring, S:bitstring, T:bitstring, W:bitstring) = OVDevCertChain in
+
+	(* Check bilinear pairings *)
+	(* Verify h(R, Y) == h(S,P) *)
+	if emverify(R, S, Y) = ok() then
+	
+	(* Verify h(R+W, X) = h(T, P) *)
+	if emverify(plus(R, W), T, X) = ok() then 
+
+	(* CL-Credentials are valid (only Manufacturer can have computed them becuase it is the only one that knows x and y) *)
+
+	(* Ownership Voucher internal verification *)
+	let (guid:bitstring, iprendezvous:bitstring, pkman:pkey, hashDevCertChain:bitstring) = OVHeader in
+	let (OVEntryPayload:bitstring, signature:bitstring) = OVEntry in
+	let (pkown:pkey, hashHeader:bitstring) = OVEntryPayload in 
+
+	(* Check hash hashDevCertChain *)
+	if hashDevCertChain = hash(OVDevCertChain) then
+	(* Check correct Owner pk in the last Entry *)
+	if pkown = pk(skown) then
+	(* Check hash hashHeader in the Entry *)
+	if hashHeader = hash(OVHeader) then
+	(* Check signature in the last Entry *)
+	if checksign(signature, OVEntryPayload, pkman) = ok() then
+	
+	event OwnerValidOVDevCredentialsReceived(OVDevCertChain);
+	event OwnerValidOVReceived(OV);
+	
+	(* NOTE: here we don't check if the pkman is the correct key, it will be done by the Rendezvous Server *)
+
+	(* Finish ACKA *)
+	new secOwner:bitstring;
+	let Z = exp(W, secOwner) in
+	let U = exp(cre(S), secOwner) in
+
+	let kenc = KDF(Z) in
+	let kmac = KDF(KDF(Z)) in	
+	let kfogdevice = KDF((kfog, guid)) in
+
+	let blob = (ipfognode, kfogdevice) in
+	let encblob = senc(blob, kenc) in
+	let tag = hmac(blob, kmac) in
+
+	(* TO0 protocol *)
+
+	(* Message for the Rendezvous Server *)
+	let mserver = (guid, U, OV, tag, encblob) in
+	let signmserver = sign(mserver, skown) in
+
+	event OwnerInitTO0(mserver);
+	out(ch, (iprendezvous, mserver, signmserver));
+
+	event EndOwner()
+	.
+
+
+let FogNode(kfog:bitstring, ip:bitstring) = 
+
+	(* TO2 protocol *)
+	
+	(* Fog node waitinf for a message from the device *)
+	in(ch, mdevice:bitstring);
+
+	let (guid:bitstring, ipfognode:bitstring, encm:bitstring) = mdevice in
+	
+	(* Check correct IP *)
+	if ipfognode = ip then
+	
+	(* Compute kfogdevice *)
+	let kfogdevice = KDF((kfog, guid)) in
+
+	let squery' = sdec(encm, kfogdevice) in
+
+	if squery' = squery then
+
+	event FogNodeEndTO2(mdevice);
+
+	(* END PROTOCOL *)
+	event EndProtocol()
+	.
+
+
+let RendezvousServer(ip:bitstring, pkman:pkey) =
+	
+	(* TO0 protocol *)
+	(* Receive the message from the Owner *)
+	in(ch, mowner:bitstring);
+
+	let (iprendezvous:bitstring, m:bitstring, signature:bitstring) = mowner in
+	let (guid:bitstring, U:bitstring, OV:bitstring, tag:bitstring, encblob:bitstring) = m in
+
+	(* Check IP server is correct *)
+	if iprendezvous = ip then
+	let (OVHeader:bitstring, OVDevCertChain:bitstring, OVEntry:bitstring) = OV in
+	let (OVEntryPayload:bitstring, signman:bitstring) = OVEntry in
+	let (pkown:pkey, hashHeader:bitstring) = OVEntryPayload in
+	let (guid':bitstring, iprendezvous':bitstring, pkman':pkey, hashDevCertChain':bitstring) = OVHeader in
+
+	(* Extract the pkown and verify signature on the message *)
+	if checksign(signature, m, pkown) = ok() then
+	if guid = guid' then
+	if iprendezvous' = iprendezvous then
+
+	(* Ownership Voucher internal verification *)
+	(* Check hash on DevCertChain *)
+	if hashDevCertChain' = hash(OVDevCertChain) then
+	(* Check hash on OVHeader *)
+	if hashHeader = hash(OVHeader) then
+	(* Check signature in the last entry *)
+	if checksign(signman, OVEntryPayload, pkman') = ok() then
+	(* Check if pkman in the OVHeader is correct *)
+	(* NOTE: We assume pkman is trusted by the Rendezvous Server *)
+	if pkman = pkman' then
+		
+	(* The Owner is the correct "owner" of the OV *)
+	(* Save the correspondance -> guid, OV, tag, encblob *)
+	event RendezvousServerEndTO0(m);
+
+	(* TO1 protocol *)
+	(* Rendezvous server waiting for a connection from Device *)
+	in(ch, mdevice:bitstring);
+
+	let (iprendezvous'':bitstring, guid'':bitstring) = mdevice in
+
+	event RendezvousServerInitTO1(m);
+	
+	(* TODO: the device should authenticate to the server *)
+
+	if iprendezvous'' = ip then
+	if guid'' = guid then
+	
+	event RendezvousServerEndTO1(guid'');
+	out(ch, (m, signature));
+	
+	event EndRendezvousServer()
+	.
+	
+		
+
+process
+
+	(* Device guid *)
+	new guid:bitstring;
+	
+	(* ACKA SETUP *)
+	new x:bitstring;
+	new y:bitstring;
+	let X = pmult(P, x) in
+	let Y = pmult(P, y) in
+
+	(* Rendezvous Server IP address *)
+	new iprendezvous:bitstring;
+
+	(* Fog Node IP address *)
+	new ipfognode:bitstring;
+
+	(* Owner key pair *)
+	new skown:skey;
+	let pkown = pk(skown) in
+
+	(* Manufacturer key pair *)				(* We assume the manufacturer is trusted by the Rendezvous Server *)
+	new skman:skey;						(* Otherwise we can add a CA*)
+	let pkman = pk(skman) in
+
+	(* Kfog shared between the Owner and FogNode *)
+	new kfog:bitstring;
+	
+	
+	Device(pkman) | Manufacturer(skman, guid, iprendezvous, pkown, x, y) | !Owner(kfog, skown, ipfognode, X, Y) 
+		| !FogNode(kfog, ipfognode) | !RendezvousServer(iprendezvous, pkman)
+
+
+
+
+
+
+
+
+
+
