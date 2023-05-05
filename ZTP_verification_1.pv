@@ -33,7 +33,7 @@ fun plus(bitstring, bitstring):bitstring.
 reduc forall R:bitstring, y:bitstring;
 	emverify(R, pmult(R,y), pmult(P,y)) = ok().
 
-(* ACKA ephimeral credentials *)
+(* AACKA ephimeral credentials *)
 fun cre(bitstring):bitstring.
 fun exp(bitstring, bitstring):bitstring.
 equation forall x:bitstring, y:bitstring, B:bitstring;
@@ -150,7 +150,7 @@ let Device(spkman:pkey) =
 	(* Verify the signature on mowner *)
 	if checksign(signature, mowner, pkown') = ok() then
 
-	(* Finish ACKA *)
+	(* Finish AACKA *)
 	let Z = exp(U', f) in
 	
 	let kenc = KDF(Z) in
@@ -252,7 +252,7 @@ let Owner(kfog:bitstring, skown:skey, ipfognode:bitstring, X:bitstring, Y:bitstr
 	
 	(* NOTE: here we don't check if the pkman is the correct key, it will be done by the Rendezvous Server *)
 
-	(* Finish ACKA *)
+	(* Finish AACKA *)
 	new secOwner:bitstring;
 	let Z = exp(W, secOwner) in
 	let U = exp(cre(S), secOwner) in
@@ -366,7 +366,7 @@ process
 	(* Device guid *)
 	new guid:bitstring;
 	
-	(* ACKA SETUP *)
+	(* AACKA SETUP *)
 	new x:bitstring;
 	new y:bitstring;
 	let X = pmult(P, x) in
